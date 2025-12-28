@@ -13,21 +13,66 @@
 <div id="output"></div>
 
 <script type="module">
-    import {INPUT_EVENT_TYPE, COLOR, Chessboard, BORDER_TYPE} from "./src/Chessboard.js"
-    import {MARKER_TYPE, Markers} from "./src/extensions/markers/Markers.js"
-    import {PROMOTION_DIALOG_RESULT_TYPE, PromotionDialog} from "./src/extensions/promotion-dialog/PromotionDialog.js"
-    import {Accessibility} from "./src/extensions/accessibility/Accessibility.js"
-    import {Chess} from "./src/chess.js"
+import {INPUT_EVENT_TYPE, COLOR, Chessboard, BORDER_TYPE} from "./src/Chessboard.js"
+import {MARKER_TYPE, Markers} from "./src/extensions/markers/Markers.js"
+import {PROMOTION_DIALOG_RESULT_TYPE, PromotionDialog} from "./src/extensions/promotion-dialog/PromotionDialog.js"
+import {Accessibility} from "./src/extensions/accessibility/Accessibility.js"
+import {Chess} from "./src/chess.js"
 
+(async () => {
+    // Instantiate cchess WebAssembly module
+    const module = await WebAssembly.instantiateStreaming(fetch("./cchess.wasm"))
+    const CChess = module.instance.exports
+
+    const CChessMap = " prnbqk"
+    const a = "a".charCodeAt(0)
+    const one = "1".charCodeAt(0)
+
+    // Set up cm-chessboard
     const chess = new Chess()
+    CChess.reset();
 
-    function makeEngineMove(chessboard) {
+    function encodeMove(move) {
+        // Encode a chess.js move for cchess.wasm
+        const fromFile = move.from.charCodeAt(0) - a
+        const fromRank = move.from.charCodeAt(1) - one
+        const toFile = move.to.charCodeAt(0) - a
+        const toRank = move.to.charCodeAt(1) - one
+        const promotion = move.promotion ? CChessMap.indexOf(move.promotion) : 0
+
+        return promotion | (toFile << 3) | (toRank << 6) | (fromFile << 9) | (fromRank << 12)
+    }
+
+    function decodeMove(enc) {
+        // Encode a cchess.wasm move for chess.js
+        if (enc & (1 << 31)) {
+            throw "Error received from CChess!"
+        }
+
+        const fromRank = String.fromCharCode(((enc >> 12) & 0x7) + one)
+        const fromFile = String.fromCharCode(((enc >> 9) & 0x7) + a)
+        const toRank = String.fromCharCode(((enc >> 6) & 0x7) + one)
+        const toFile = String.fromCharCode(((enc >> 3) & 0x7) + a)
+        const promotion = (enc & 0x7) ? CChessMap.charAt(enc & 0x7) : undefined
+
+        return {
+            from: fromFile + fromRank,
+            to: toFile + toRank,
+            ...(promotion ? { promotion } : {}),
+        }
+    }
+
+    function makeEngineMove(chessboard, playerMove) {
         const possibleMoves = chess.moves({verbose: true})
         if (possibleMoves.length > 0) {
-            const randomIndex = Math.floor(Math.random() * possibleMoves.length)
-            const randomMove = possibleMoves[randomIndex]
+            // Call into cchess.wasm for the next move
+            if (!CChess.move(encodeMove(playerMove))) throw "Failed to apply player move!"
+            const enc = CChess.get_move()
+            const nextMove = decodeMove(enc)
+            if (!CChess.move(enc)) throw "Failed to apply AI move!"
+
             setTimeout(() => { // smoother with 500ms delay
-                chess.move({from: randomMove.from, to: randomMove.to})
+                chess.move(nextMove)
                 chessboard.setPosition(chess.fen(), true)
                 chessboard.enableMoveInput(inputHandler, COLOR.white)
             }, 500)
@@ -53,7 +98,7 @@
             if (result) {
                 event.chessboard.state.moveInputProcess.then(() => { // wait for the move input process has finished
                     event.chessboard.setPosition(chess.fen(), true).then(() => { // update position, maybe castled and wait for animation has finished
-                        makeEngineMove(event.chessboard)
+                        makeEngineMove(event.chessboard, move)
                     })
                 })
             } else {
@@ -64,9 +109,10 @@
                         event.chessboard.showPromotionDialog(event.squareTo, COLOR.white, (result) => {
                             console.log("promotion result", result)
                             if (result.type === PROMOTION_DIALOG_RESULT_TYPE.pieceSelected) {
-                                chess.move({from: event.squareFrom, to: event.squareTo, promotion: result.piece.charAt(1)})
+                                const move = {from: event.squareFrom, to: event.squareTo, promotion: result.piece.charAt(1)}
+                                chess.move(move)
                                 event.chessboard.setPosition(chess.fen(), true)
-                                makeEngineMove(event.chessboard)
+                                makeEngineMove(event.chessboard, move)
                             } else {
                                 // promotion canceled
                                 event.chessboard.enableMoveInput(inputHandler, COLOR.white)
@@ -97,6 +143,8 @@
         ]
     })
     board.enableMoveInput(inputHandler, COLOR.white)
+
+})();
 </script>
 </body>
 </html>
