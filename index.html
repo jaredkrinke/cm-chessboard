@@ -94,14 +94,15 @@ import {Chess} from "./src/chess.js"
             return moves.length > 0
         } else if (event.type === INPUT_EVENT_TYPE.validateMoveInput) {
             const move = {from: event.squareFrom, to: event.squareTo, promotion: event.promotion}
-            const result = chess.move(move)
-            if (result) {
+            try {
+                chess.move(move)
                 event.chessboard.state.moveInputProcess.then(() => { // wait for the move input process has finished
                     event.chessboard.setPosition(chess.fen(), true).then(() => { // update position, maybe castled and wait for animation has finished
                         makeEngineMove(event.chessboard, move)
                     })
                 })
-            } else {
+                return true
+            } catch {
                 // promotion?
                 let possibleMoves = chess.moves({square: event.squareFrom, verbose: true})
                 for (const possibleMove of possibleMoves) {
@@ -123,7 +124,7 @@ import {Chess} from "./src/chess.js"
                     }
                 }
             }
-            return result
+            return false
         } else if (event.type === INPUT_EVENT_TYPE.moveInputFinished) {
             if(event.legalMove) {
                 event.chessboard.disableMoveInput()
